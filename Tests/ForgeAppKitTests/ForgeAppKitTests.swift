@@ -38,6 +38,18 @@ final class ForgeAppKitTests: XCTestCase {
         XCTAssertFalse(failure.isRetryable)
     }
 
+    func testOtherErrorsNeverShowSwiftsErrorNumber() {
+        let failure = ForgeFailure(TestError.plain)
+        XCTAssertFalse(failure.message.contains("couldn"), failure.message)
+    }
+
+    func testURLSessionOfflineIsRetryable() {
+        let failure = ForgeFailure(URLError(.notConnectedToInternet))
+        XCTAssertEqual(failure.title, "You're Offline")
+        XCTAssertTrue(failure.isRetryable)
+        XCTAssertTrue(ForgeFailure(URLError(.timedOut)).isRetryable)
+    }
+
     func testCancellationIsNotAFailure() {
         XCTAssertTrue(ForgeFailure.isCancellation(CancellationError()))
         XCTAssertTrue(ForgeFailure.isCancellation(LibraryError.cancelled))
@@ -54,6 +66,19 @@ final class ForgeAppKitTests: XCTestCase {
         XCTAssertEqual(alert.style, .alert)
         XCTAssertEqual(alert.buttons.map(\.identifier), ["alert.ok"])
         XCTAssertEqual(alert.buttons.first?.role, .cancel)
+    }
+
+    func testRetryableFailureAlertOffersTryAgain() throws {
+        let alert = try XCTUnwrap(ForgeAlert.failure(LibraryError.offline as Error, retry: Action.delete(3)))
+        XCTAssertEqual(alert.buttons.map(\.title), ["Try Again", "Cancel"])
+        XCTAssertEqual(alert.buttons.map(\.identifier), ["alert.retry", "alert.ok"])
+        XCTAssertEqual(alert.action(for: "Try Again"), .delete(3))
+    }
+
+    func testFailureThatWontRecoverHasOnlyOK() {
+        let alert = ForgeAlert.failure(ForgeFailure(title: "No", message: "Nope."), retry: Action.delete(3))
+        XCTAssertEqual(alert.buttons.map(\.identifier), ["alert.ok"])
+        XCTAssertNil(ForgeAlert.failure(LibraryError.cancelled as Error, retry: Action.delete(3)))
     }
 
     func testDestructiveConfirmationIsADialogWithCancel() {
@@ -93,6 +118,21 @@ final class ForgeAppKitTests: XCTestCase {
         let stopped = await ForgeLoad<Int>.capture { throw CancellationError() }
         XCTAssertEqual(stopped, .idle)
         XCTAssertTrue(ForgeLoad<Int>.loading.isLoading)
+    }
+
+    func testReloadKeepsContentAndNeverStrandsASpinner() async {
+        let shown = ForgeLoad<Int>.loaded(1)
+        XCTAssertEqual(shown.whileReloading, .loaded(1), "loaded content stays while reloading")
+        XCTAssertEqual(ForgeLoad<Int>.idle.whileReloading, .loading)
+
+        let fresh = await shown.reloaded { 2 }
+        XCTAssertEqual(fresh, .loaded(2))
+        let stopped = await shown.reloaded { throw CancellationError() }
+        XCTAssertEqual(stopped, .loaded(1), "a stopped reload changes nothing")
+        let stoppedSpinner = await ForgeLoad<Int>.loading.reloaded { throw CancellationError() }
+        XCTAssertEqual(stoppedSpinner, .idle)
+        let failed = await shown.reloaded { throw LibraryError.offline }
+        XCTAssertEqual(failed.failure?.title, "You're Offline")
     }
 
     // MARK: Submission
